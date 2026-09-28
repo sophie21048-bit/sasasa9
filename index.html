@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Доступная маршрутизация — демонстратор</title>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- Наш CSS -->
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+    <!-- ==================== САЙДБАР ==================== -->
+    <aside id="sidebar">
+        <div class="sidebar-header">
+            <h1>Доступный маршрут</h1>
+            <p>Демонстратор проверки препятствий</p>
+        </div>
+
+        <div class="sidebar-body">
+
+            <!-- Шаги алгоритма -->
+            <div class="section-title">Алгоритм</div>
+            <ul class="step-list">
+                <li class="step-item">
+                    <span class="step-num">1</span>
+                    <span>Получить пешеходный маршрут между двумя точками</span>
+                </li>
+                <li class="step-item">
+                    <span class="step-num">2</span>
+                    <span>Найти пересечения с дорогами и бордюрами</span>
+                </li>
+                <li class="step-item">
+                    <span class="step-num">3</span>
+                    <span>Получить панорамы для каждого перехода</span>
+                </li>
+                <li class="step-item">
+                    <span class="step-num">4</span>
+                    <span>Проверить наличие съездов с обеих сторон</span>
+                </li>
+                <li class="step-item">
+                    <span class="step-num">5</span>
+                    <span>Отметить проблемные переходы и найти обход</span>
+                </li>
+            </ul>
+
+            <!-- Статистика -->
+            <div class="section-title">Результаты проверки</div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="num" id="stat-green">0</div>
+                    <div class="label">Доступно</div>
+                </div>
+                <div class="stat-card">
+                    <div class="num" id="stat-red">0</div>
+                    <div class="label">Проблем</div>
+                </div>
+                <div class="stat-card">
+                    <div class="num" id="stat-yellow">0</div>
+                    <div class="label">Не уверен</div>
+                </div>
+            </div>
+
+            <!-- Кнопка запуска -->
+            <button class="btn btn-primary" id="btnRun" onclick="runAnalysis()">
+                Запустить проверку маршрута
+            </button>
+
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+
+            <!-- Список переходов -->
+            <div class="section-title">Переходы на маршруте</div>
+            <div id="crossingList"></div>
+
+            <!-- Легенда -->
+            <div class="section-title">Легенда</div>
+            <div class="legend-item">
+                <div class="legend-dot green"></div>
+                <span>Съезды с обеих сторон — доступно</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot red"></div>
+                <span>Высокий бордюр / нет съезда</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot yellow"></div>
+                <span>Модель не уверена — нужна проверка</span>
+            </div>
+
+            <!-- Кнопка обхода -->
+            <div class="mt-16">
+                <button class="btn btn-outline" id="btnDetour" onclick="showDetour()" disabled>
+                    Показать обход
+                </button>
+            </div>
+
+            <!-- Панорама -->
+            <div class="mt-12">
+                <button class="btn btn-outline btn-sm" id="btnPanorama" onclick="openPanorama()" disabled>
+                    Открыть панораму проблемного места
+                </button>
+            </div>
+
+        </div>
+    </aside>
+
+    <!-- ==================== КАРТА ==================== -->
+    <div id="map"></div>
+
+    <!-- ==================== МОДАЛЬНОЕ ОКНО ==================== -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal">
+            <h2>Результат проверки перехода</h2>
+            <p>Модель проанализировала панораму и определила:</p>
+            <div class="result-box" id="modalResult"></div>
+            <p class="modal-hint">
+                В реальном проекте здесь будет результат работы YOLO-модели,
+                обученной на классах: curb_ramp, raised_curb, steps, surface_problem, obstacle.
+            </p>
+            <button class="btn btn-primary mt-12" onclick="closeModal()">
+                Понятно
+            </button>
+        </div>
+    </div>
+
+    <!-- ==================== LEAFLET JS ==================== -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // ================================================================
+        //  ДАННЫЕ ДЕМОНСТРАТОРА
+        // ================================================================
+
+        // Точки маршрута (упрощённая полилиния)
+        const routePoints = [
+            [55.7895, 37.5745],
+            [55.7893, 37.5750],
+            [55.7890, 37.5755],
+            [55.7888, 37.5760],
+            [55.7885, 37.5765],
+            [55.7882, 37.5770],
+            [55.7880, 37.5775],
+            [55.7878, 37.5780],
+        ];
+
+        // Переходы
+        const crossings = [
+            {
+                id: 0,
+                lat: 55.7894,
+                lng: 37.5748,
+                name: 'Переход у школы',
+                status: null,
+                confidence: null,
+                sides: { left: null, right: null }
+            },
+            {
+                id: 1,
+                lat: 55.7890,
+                lng: 37.5756,
+                name: 'Переход у аптеки',
+                status: null,
+                confidence: null,
+                sides: { left: null, right: null }
+            },
+            {
+                id: 2,
+                lat: 55.7886,
+                lng: 37.5764,
+                name: 'Переход у парка',
+                status: null,
+                confidence: null,
+                sides: { left: null, right: null }
+            },
+            {
+                id: 3,
+                lat: 55.7882,
+                lng: 37.5772,
+                name: 'Переход у магазина',
+                status: null,
+                confidence: null,
+                sides: { left: null, right: null }
+            }
+        ];
+
+        // Обход
+        const detourPoints = [
+            [55.7895, 37.5745],
+            [55.7894, 37.5748],
+            [55.7890, 37.5750],
+            [55.7885, 37.5755],
+            [55.7880, 37.5770],
+            [55.7878, 37.5780],
+        ];
+
+        // ================================================================
+        //  ИНИЦИАЛИЗАЦИЯ КАРТЫ
+        // ================================================================
+
+        const map = L.map('map', {
+            zoomControl: false
+        }).setView([55.7888, 37.5763], 17);
+
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // ================================================================
+        //  ОТРИСОВКА МАРШРУТА
+        // ================================================================
+
+        L.polyline(routePoints, {
+            color: '#1a73e8',
+            weight: 5,
+            opacity: 0.85,
+            dashArray: '10, 6',
+            lineCap: 'round',
+            lineJoin: 'round'
+        }).addTo(map);
+
+        L.marker(routePoints[0], {
+            icon: makeDotIcon('#1a73e8')
+        }).addTo(map).bindPopup('Старт');
+
+        L.marker(routePoints[routePoints.length - 1], {
+            icon: makeDotIcon('#1a73e8')
+        }).addTo(map).bindPopup('Финиш');
+
+        // ================================================================
+        //  ИКОНКИ-ТОЧКИ
+        // ================================================================
+
+        function makeDotIcon(color) {
+            return L.divIcon({
+                className: 'custom-marker',
+                html: `<div class="dot-marker" style="background:${color};"></div>`,
+                iconSize: [22, 22],
+                iconAnchor: [11, 11]
+            });
+        }
+
+        function getMarkerIcon(status) {
+            let color = '#9e9e9e';
+            if (status === 'green') color = '#34a853';
+            if (status === 'red') color = '#ea4335';
+            if (status === 'yellow') color = '#fbbc04';
+
+            return L.divIcon({
+                className: 'custom-marker',
+                html: `<div class="dot-marker dot-marker-lg" style="background:${color};"></div>`,
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+        }
+
+        // ================================================================
+        //  МАРКЕРЫ ПЕРЕХОДОВ
+        // ================================================================
+
+        const crossingMarkers = [];
+
+        function createCrossingMarkers() {
+            crossings.forEach((c) => {
+                const marker = L.marker([c.lat, c.lng], {
+                    icon: getMarkerIcon(null)
+                }).addTo(map);
+
+                marker.bindPopup(`
+                    <strong>${c.name}</strong><br>
+                    <span class="popup-coords">
+                        ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}
+                    </span><br>
+                    <span class="popup-status">Статус: не проверен</span>
+                `);
+
+                crossingMarkers.push(marker);
+            });
+        }
+
+        createCrossingMarkers();
+
+        // ================================================================
+        //  РЕЗУЛЬТАТЫ "МОДЕЛИ" (ИМИТАЦИЯ)
+        // ================================================================
+
+        const modelResults = {
+            0: { status: 'green',  confidence: 0.94, left: 'ramp', right: 'ramp',
+                 detail: 'curb_ramp: 0.94\nraised_curb: 0.03\n\nСъезды обнаружены с обеих сторон.\nПереход доступен.' },
+            1: { status: 'red',    confidence: 0.87, left: 'raised_curb', right: 'missing',
+                 detail: 'raised_curb: 0.87\ncurb_ramp: 0.02\n\nВысокий бордюр слева.\nСъезд справа не обнаружен.\nПереход НЕДОСТУПЕН.' },
+            2: { status: 'yellow', confidence: 0.61, left: 'unknown', right: 'ramp',
+                 detail: 'curb_ramp: 0.61 (низкая уверенность)\nunknown: 0.31\n\nМодель не уверена в левой стороне.\nТребуется ручная проверка.' },
+            3: { status: 'green',  confidence: 0.91, left: 'ramp', right: 'ramp',
+                 detail: 'curb_ramp: 0.91\nraised_curb: 0.05\n\nСъезды обнаружены с обеих сторон.\nПереход доступен.' }
+        };
+
+        let analysisDone = false;
+
+        // ================================================================
+        //  ЗАПУСК АНАЛИЗА
+        // ================================================================
+
+        function runAnalysis() {
+            const btn = document.getElementById('btnRun');
+            btn.disabled = true;
+            btn.textContent = 'Анализ...';
+
+            const progress = document.getElementById('progressFill');
+            progress.style.width = '0%';
+
+            let currentStep = 0;
+            const totalSteps = crossings.length;
+
+            const interval = setInterval(() => {
+                if (currentStep >= totalSteps) {
+                    clearInterval(interval);
+                    progress.style.width = '100%';
+                    btn.textContent = 'Проверка завершена';
+                    btn.classList.add('btn-success');
+                    analysisDone = true;
+                    document.getElementById('btnDetour').disabled = false;
+                    document.getElementById('btnPanorama').disabled = false;
+                    updateStats();
+                    return;
+                }
+
+                const c = crossings[currentStep];
+                const result = modelResults[c.id];
+
+                c.status = result.status;
+                c.confidence = result.confidence;
+                c.sides = { left: result.left, right: result.right };
+                c.detail = result.detail;
+
+                crossingMarkers[currentStep].setIcon(getMarkerIcon(result.status));
+                crossingMarkers[currentStep].setPopupContent(`
+                    <strong>${c.name}</strong><br>
+                    <span class="popup-coords">
+                        ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}
+                    </span><br>
+                    <span class="popup-status">Статус: ${
+                        result.status === 'green' ? 'Доступно' :
+                        result.status === 'red' ? 'Проблема' : 'Не уверен'
+                    }</span>
+                `);
+
+                renderCrossingList();
+
+                currentStep++;
+                progress.style.width = (currentStep / totalSteps * 100) + '%';
+            }, 800);
+        }
+
+        // ================================================================
+        //  СПИСОК ПЕРЕХОДОВ
+        // ================================================================
+
+        function renderCrossingList() {
+            const container = document.getElementById('crossingList');
+            container.innerHTML = '';
+
+            crossings.forEach((c, i) => {
+                const div = document.createElement('div');
+                div.className = 'crossing-card';
+
+                if (c.status === 'green') div.classList.add('status-green');
+                if (c.status === 'red') div.classList.add('status-red');
+                if (c.status === 'yellow') div.classList.add('status-yellow');
+
+                let statusText = 'Не проверен';
+                if (c.status === 'green') statusText = 'Доступно';
+                if (c.status === 'red') statusText = 'Проблема';
+                if (c.status === 'yellow') statusText = 'Не уверен';
+
+                let confidenceHtml = '';
+                if (c.confidence !== null) {
+                    confidenceHtml = `<span class="confidence">
+                        Уверенность: ${(c.confidence * 100).toFixed(0)}%
+                    </span>`;
+                }
+
+                div.innerHTML = `
+                    <div class="name">${c.name}</div>
+                    <div class="coords">${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}</div>
+                    <div class="status-text">${statusText}</div>
+                    ${confidenceHtml}
+                `;
+
+                div.onclick = () => showDetails(i);
+                container.appendChild(div);
+            });
+        }
+
+        renderCrossingList();
+
+        // ================================================================
+        //  МОДАЛЬНОЕ ОКНО
+        // ================================================================
+
+        function showDetails(index) {
+            const c = crossings[index];
+            if (!c.status) return;
+
+            document.getElementById('modalResult').textContent = c.detail;
+            document.getElementById('modalOverlay').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('modalOverlay').classList.remove('active');
+        }
+
+        document.getElementById('modalOverlay').addEventListener('click', function(e) {
+            if (e.target === this) closeModal();
+        });
+
+        // ================================================================
+        //  СТАТИСТИКА
+        // ================================================================
+
+        function updateStats() {
+            let green = 0, red = 0, yellow = 0;
+            crossings.forEach(c => {
+                if (c.status === 'green') green++;
+                if (c.status === 'red') red++;
+                if (c.status === 'yellow') yellow++;
+            });
+            document.getElementById('stat-green').textContent = green;
+            document.getElementById('stat-red').textContent = red;
+            document.getElementById('stat-yellow').textContent = yellow;
+        }
+
+        // ================================================================
+        //  ОБХОД
+        // ================================================================
+
+        let detourLine = null;
+
+        function showDetour() {
+            if (detourLine) {
+                map.removeLayer(detourLine);
+                detourLine = null;
+            }
+
+            detourLine = L.polyline(detourPoints, {
+                color: '#34a853',
+                weight: 4,
+                opacity: 0.9,
+                dashArray: '8, 8',
+                lineCap: 'round'
+            }).addTo(map);
+
+            L.marker(detourPoints[1], {
+                icon: makeDotIcon('#34a853')
+            }).addTo(map).bindPopup('Обход через доступный переход');
+
+            alert(
+                'Найден обход.\n\n' +
+                'Проблемный переход: «Переход у аптеки».\n' +
+                'Причина: высокий бордюр слева, нет съезда справа.\n\n' +
+                'Обход через «Переход у школы» (доступен с обеих сторон).\n' +
+                'Дополнительное расстояние: около 150 м.'
+            );
+        }
+
+        // ================================================================
+        //  ПАНОРАМА
+        // ================================================================
+
+        function openPanorama() {
+            const problem = crossings.find(c => c.status === 'red' || c.status === 'yellow');
+            if (!problem) {
+                alert('Проблемных переходов не найдено.');
+                return;
+            }
+
+            const url = `https://yandex.ru/maps/?panorama[point]=${problem.lng},${problem.lat}`;
+            window.open(url, '_blank');
+
+            alert(
+                `Открываем панораму для «${problem.name}».\n\n` +
+                `Координаты: ${problem.lat.toFixed(5)}, ${problem.lng.toFixed(5)}\n` +
+                `В реальном проекте здесь будет кадр панорамы, обработанный моделью.`
+            );
+        }
+
+        // ================================================================
+        //  ЛОГ В КОНСОЛЬ
+        // ================================================================
+
+        console.log('Демонстратор доступной маршрутизации загружен.');
+        console.log('Маршрут:', routePoints.length, 'точек');
+        console.log('Переходов:', crossings.length);
+    </script>
+
+</body>
+</html>
